@@ -37,7 +37,11 @@ class McpServer(private val tools: McpTools) {
         try {
             connection.soTimeout = 30_000
             val input = connection.getInputStream().buffered()
-            val method = readToken(input); val path = readToken(input); readToken(input)
+            val requestLine = readLine(input)
+            val parts = requestLine.split(' ')
+            require(parts.size == 3 && parts[2].matches(Regex("HTTP/1\\.[01]"))) { "HTTP 请求行无效" }
+            val method = parts[0]
+            val path = parts[1].substringBefore('?').trimEnd('/').ifEmpty { "/" }
             val headers = mutableMapOf<String, String>()
             while (true) {
                 val line = readLine(input)
@@ -99,16 +103,6 @@ class McpServer(private val tools: McpTools) {
                 else -> error(id, -32601, "方法不存在：$method")
             }
         } catch (e: Exception) { error(id, -32602, e.message ?: "参数错误") }
-    }
-
-    private fun readToken(input: java.io.InputStream): String {
-        val out = ByteArrayOutputStream()
-        while (true) {
-            val c = input.read(); require(c >= 0) { "HTTP 请求头不完整" }
-            if (c == 32) return out.toString(Charsets.UTF_8.name())
-            require(c !in listOf(10, 13) && out.size() < 8192) { "HTTP 请求头无效" }
-            out.write(c)
-        }
     }
 
     private fun readLine(input: java.io.InputStream): String {
