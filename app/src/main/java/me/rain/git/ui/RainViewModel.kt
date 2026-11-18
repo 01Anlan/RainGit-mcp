@@ -112,6 +112,7 @@ class RainViewModel(application: Application) : AndroidViewModel(application) {
     fun setTheme(v: Int) { store.themeMode = v; themeMode = v }
     fun selectCollaborationFilter(value: Int) { if (busy) return; collaborationFilter = value.coerceIn(0, 1); refreshCollaboration() }
     fun clearMessage() { message = null }
+    fun mcpMessage(value: String) { message = value }
     fun closeLog() { logTask?.cancel(); logTask = null; logVersion++; logText = null; logJobId = null; logRunId = null; logStatus = ""; logLoading = false }
     fun pauseActions() { logTask?.cancel() }
     fun closeDiff() { diffText = null }

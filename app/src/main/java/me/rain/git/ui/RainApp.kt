@@ -71,7 +71,7 @@ fun RainApp(
                             Column {
                                 Text(
                                     if (model.screen == "detail") model.selectedRepo?.name ?: model.selectedDir?.name ?: "本地仓库"
-                                    else when (model.screen) { "home" -> "RainGit"; "local" -> "本地仓库"; "actions" -> "构建中心"; else -> "设置" },
+                                    else when (model.screen) { "home" -> "RainGit"; "local" -> "本地仓库"; "actions" -> "构建中心"; "mcp" -> "MCP 服务"; else -> "设置" },
                                     style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold,
                                     maxLines = 1, overflow = TextOverflow.Ellipsis
                                 )
@@ -83,7 +83,7 @@ fun RainApp(
                             }
                         },
                         actions = {
-                            if (model.screen != "settings") {
+                            if (model.screen != "settings" && model.screen != "mcp") {
                                 IconButton(onClick = {
                                     when (model.screen) {
                                         "detail" -> when (model.detailTab) { 2 -> model.refreshActions(); 3 -> model.refreshCollaboration(); else -> model.refreshLocal() }
@@ -103,6 +103,7 @@ fun RainApp(
                             Triple("home", "仓库", Icons.Rounded.Folder),
                             Triple("local", "本地", Icons.Rounded.Code),
                             Triple("actions", "构建", Icons.Rounded.PlayArrow),
+                            Triple("mcp", "MCP", Icons.Rounded.Hub),
                             Triple("settings", "设置", Icons.Rounded.Settings)
                         ).forEach { (page, label, icon) ->
                             NavigationBarItem(
@@ -126,7 +127,7 @@ fun RainApp(
                             // repository-shared-bounds: matched card carries the motion; scene content only fades.
                             fadeIn(tween(260, delayMillis = 30)) togetherWith fadeOut(tween(125))
                         } else {
-                            val pages = listOf("home", "local", "actions", "settings")
+                            val pages = listOf("home", "local", "actions", "mcp", "settings")
                             val forward = pages.indexOf(targetState) > pages.indexOf(initialState)
                             (fadeIn(tween(180)) + slideInHorizontally(tween(220)) { if (forward) it / 12 else -it / 12 }) togetherWith
                                 (fadeOut(tween(120)) + slideOutHorizontally(tween(220)) { if (forward) -it / 12 else it / 12 })
@@ -139,6 +140,7 @@ fun RainApp(
                             "home" -> RemoteScreen(model, actionsOnly = false, sharedScope = this@SharedTransitionLayout, visibilityScope = this@AnimatedContent)
                             "local" -> LocalScreen(model)
                             "actions" -> RemoteScreen(model, actionsOnly = true, sharedScope = this@SharedTransitionLayout, visibilityScope = this@AnimatedContent)
+                            "mcp" -> McpScreen(model)
                             "settings" -> SettingsScreen(model, onChooseDirectory, onGrantStorage, onOpenUrl)
                             "detail" -> RepositoryScreen(model, onOpenUrl, sharedScope = this@SharedTransitionLayout, visibilityScope = this@AnimatedContent)
                         }

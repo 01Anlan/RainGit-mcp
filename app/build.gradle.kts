@@ -60,6 +60,8 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.2")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("io.ktor:ktor-server-core:2.3.12")
+    implementation("io.ktor:ktor-server-cio:2.3.12")
     implementation("org.eclipse.jgit:org.eclipse.jgit:6.10.1.202505221210-r")
     implementation("org.slf4j:slf4j-nop:2.0.16")
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
