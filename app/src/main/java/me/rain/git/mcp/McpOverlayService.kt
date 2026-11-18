@@ -21,6 +21,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import me.rain.git.MainActivity
 
@@ -107,10 +108,14 @@ class McpOverlayService : Service() {
         }
         wm.addView(content, params); view = content
         scope.launch {
-            McpStatus.updates(this@McpOverlayService).collect {
+            combine(McpSettings.state, McpStatus.updates(this@McpOverlayService)) { state, probe ->
+                // McpStatus emits an empty default while stopped. Prefer a real running
+                // listener, otherwise retain the service's explicit starting/error state.
+                if (probe.running) probe else state
+            }.collect {
                 val summary = when {
-                    it.starting -> "启动中…"
                     it.running -> "运行中 · ${it.port}"
+                    it.starting && McpService.isStartingNow() -> "启动中…"
                     it.error != null -> "启动失败"
                     else -> "已停止"
                 }
