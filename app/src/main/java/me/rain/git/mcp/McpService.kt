@@ -24,6 +24,7 @@ class McpService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var server: McpServer? = null
     private var activePort = 0
+    private var foregroundReady = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -32,73 +33,64 @@ class McpService : Service() {
         runCatching {
             getSystemService(NotificationManager::class.java).createNotificationChannel(
                 NotificationChannel(CHANNEL, "MCP 服务", NotificationManager.IMPORTANCE_LOW))
-        }.onFailure {
-            McpSettings.update { state -> state.copy(error = "通知初始化失败：${it.message}") }
-        }
+        }.onFailure { reportFailure("通知初始化失败", it) }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        try { return handleCommand(intent) }
-        catch (error: Throwable) {
+        try {
+            if (intent?.action == ACTION_STOP || (intent == null && server != null)) {
+                stopServer(); return START_NOT_STICKY
+            }
+            val settings = McpSettings(this)
+            val port = intent?.getIntExtra(EXTRA_PORT, settings.port) ?: settings.port
+            if (server != null && activePort == port) {
+                publishRunning(port)
+                return START_STICKY
+            }
+            // Foreground promotion is synchronous and must precede any tool or socket work.
+            // Context.startForegroundService has a strict Android timeout.
+            startForegroundWithNotification(port)
+            foregroundReady = true
+            if (server != null) { server?.close(); server = null }
+            publishStarting(port)
+            scope.launch {
+                try {
+                    diagnostic("初始化工具注册表")
+                    val toolRegistry = McpTools(applicationContext, settings)
+                    diagnostic("创建 Socket 服务")
+                    val instance = McpServer(toolRegistry)
+                    diagnostic("绑定端口 $port")
+                    instance.start(port)
+                    server = instance; activePort = port
+                    diagnostic("MCP 启动成功")
+                    publishRunning(port)
+                    updateOverlay()
+                } catch (e: Throwable) {
+                    server?.close(); server = null
+                    reportFailure("MCP 启动失败", e)
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    foregroundReady = false
+                    stopSelf()
+                }
+            }
+            return START_STICKY
+        } catch (error: Throwable) {
             reportFailure("服务入口异常", error)
             runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
+            foregroundReady = false
             stopSelf()
             return START_NOT_STICKY
         }
     }
 
-    private fun handleCommand(intent: Intent?): Int {
-        if (intent?.action == ACTION_STOP || (intent == null && server != null)) {
-            stopServer(); return START_NOT_STICKY
-        }
-        val settings = McpSettings(this)
-        val port = intent?.getIntExtra(EXTRA_PORT, settings.port) ?: settings.port
-        if (server != null && activePort == port) return START_STICKY
-        if (server != null) {
-            server?.close(); server = null
-        }
-        if (isStartingNow()) return START_STICKY
-        McpSettings.update { it.copy(running = false, starting = true, startedAt = android.os.SystemClock.elapsedRealtime(), error = null, port = port) }
-        scope.launch {
-            try {
-                diagnostic("开始前台通知")
-                startForegroundWithNotification(port)
-                diagnostic("初始化工具注册表")
-                val toolRegistry = McpTools(applicationContext, settings)
-                diagnostic("创建 Socket 服务")
-                val instance = McpServer(toolRegistry)
-                diagnostic("绑定端口 $port")
-                instance.start(port)
-                diagnostic("MCP 启动成功")
-                server = instance
-                activePort = port
-                McpSettings.update { it.copy(running = true, starting = false, port = port, error = null) }
-                updateOverlay()
-            } catch (e: Throwable) {
-                server?.close(); server = null
-                reportFailure("MCP 启动失败", e)
-                runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
-                stopSelf()
-            }
-        }
-        return START_STICKY
+    private fun publishStarting(port: Int) {
+        McpSettings.update { it.copy(running = false, starting = true,
+            startedAt = android.os.SystemClock.elapsedRealtime(), error = null, port = port) }
     }
 
-    private fun logFile(name: String) = java.io.File(java.io.File(android.os.Environment.getExternalStoragePublicDirectory(
-        android.os.Environment.DIRECTORY_DOWNLOADS), "RainGit/logs").apply { mkdirs() }, name)
-
-    private fun diagnostic(message: String) {
-        runCatching { logFile("mcp-stage.txt").appendText("${System.currentTimeMillis()} $message\n") }
-    }
-
-    private fun reportFailure(prefix: String, error: Throwable) {
-        val trace = "$prefix\n" + error.stackTraceToString().takeLast(40_000)
-        runCatching {
-            logFile("mcp-latest.txt").writeText(trace)
-            logFile("mcp-${System.currentTimeMillis()}.log").writeText(trace)
-        }
-        McpSettings.update { it.copy(running = false, starting = false,
-            error = "$prefix：${error.javaClass.simpleName}: ${error.message}") }
+    private fun publishRunning(port: Int) {
+        McpSettings.update { it.copy(running = true, starting = false,
+            error = null, port = port) }
     }
 
     private fun startForegroundWithNotification(port: Int) {
@@ -129,12 +121,30 @@ class McpService : Service() {
         server?.close(); server = null
         McpSettings.update { it.copy(running = false, starting = false, error = null) }
         stopForeground(STOP_FOREGROUND_REMOVE)
+        foregroundReady = false
         stopSelf()
     }
 
     private fun updateOverlay() {
         if (McpSettings(this).overlayEnabled && Settings.canDrawOverlays(this))
             runCatching { startService(Intent(this, McpOverlayService::class.java)) }
+    }
+
+    private fun logFile(name: String) = java.io.File(java.io.File(android.os.Environment.getExternalStoragePublicDirectory(
+        android.os.Environment.DIRECTORY_DOWNLOADS), "RainGit/logs").apply { mkdirs() }, name)
+
+    private fun diagnostic(message: String) {
+        runCatching { logFile("mcp-stage.txt").appendText("${System.currentTimeMillis()} $message\n") }
+    }
+
+    private fun reportFailure(prefix: String, error: Throwable) {
+        val trace = "$prefix\n" + error.stackTraceToString().takeLast(40_000)
+        runCatching {
+            logFile("mcp-latest.txt").writeText(trace)
+            logFile("mcp-${System.currentTimeMillis()}.log").writeText(trace)
+        }
+        McpSettings.update { it.copy(running = false, starting = false,
+            error = "$prefix：${error.javaClass.simpleName}: ${error.message}") }
     }
 
     override fun onDestroy() {
@@ -146,6 +156,9 @@ class McpService : Service() {
 
     companion object {
         private const val START_TIMEOUT_MS = 12_000L
+        const val CHANNEL = "rain_mcp_server"
+        const val ACTION_STOP = "me.rain.git.mcp.STOP"
+        const val EXTRA_PORT = "port"
 
         fun isStartingNow(): Boolean {
             val state = McpSettings.state.value
@@ -153,13 +166,9 @@ class McpService : Service() {
                 android.os.SystemClock.elapsedRealtime() - state.startedAt < START_TIMEOUT_MS
         }
 
-        const val CHANNEL = "rain_mcp_server"
-        const val ACTION_STOP = "me.rain.git.mcp.STOP"
-        const val EXTRA_PORT = "port"
-
         fun start(context: Context, port: Int) {
             if (McpSettings.state.value.running || isStartingNow()) return
-            McpSettings.update { it.copy(starting = true, startedAt = android.os.SystemClock.elapsedRealtime(), error = null, port = port) }
+            publishStartRequest(port)
             val intent = Intent(context, McpService::class.java).putExtra(EXTRA_PORT, port)
             try { context.startForegroundService(intent) }
             catch (error: Throwable) {
@@ -169,8 +178,14 @@ class McpService : Service() {
             }
         }
 
+        private fun publishStartRequest(port: Int) {
+            McpSettings.update { it.copy(starting = true, error = null, port = port,
+                startedAt = android.os.SystemClock.elapsedRealtime()) }
+        }
+
         fun stop(context: Context) {
-            context.startService(Intent(context, McpService::class.java).setAction(ACTION_STOP))
+            McpSettings.update { it.copy(running = false, starting = false, error = null) }
+            runCatching { context.startService(Intent(context, McpService::class.java).setAction(ACTION_STOP)) }
         }
     }
 }
