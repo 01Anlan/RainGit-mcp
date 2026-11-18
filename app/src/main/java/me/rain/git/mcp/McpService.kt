@@ -38,6 +38,16 @@ class McpService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        try { return handleCommand(intent) }
+        catch (error: Throwable) {
+            reportFailure("服务入口异常", error)
+            runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
+            stopSelf()
+            return START_NOT_STICKY
+        }
+    }
+
+    private fun handleCommand(intent: Intent?): Int {
         if (intent?.action == ACTION_STOP || (intent == null && server != null)) {
             stopServer(); return START_NOT_STICKY
         }
@@ -55,14 +65,21 @@ class McpService : Service() {
                 activePort = port
                 McpSettings.update { it.copy(running = true, starting = false, port = port, error = null) }
                 updateOverlay()
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 server?.close(); server = null
-                McpSettings.update { it.copy(running = false, starting = false, error = e.message ?: "启动失败") }
-                stopForeground(STOP_FOREGROUND_REMOVE)
+                reportFailure("MCP 启动失败", e)
+                runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
                 stopSelf()
             }
         }
         return START_STICKY
+    }
+
+    private fun reportFailure(prefix: String, error: Throwable) {
+        val trace = error.stackTraceToString().takeLast(40_000)
+        runCatching { java.io.File(filesDir, "mcp-error.txt").writeText(trace) }
+        McpSettings.update { it.copy(running = false, starting = false,
+            error = "$prefix：${error.javaClass.simpleName}: ${error.message}") }
     }
 
     private fun startForegroundWithNotification(port: Int) {
