@@ -39,17 +39,9 @@ object McpStatus {
         var confirmed = false
         while (true) {
             val actual = withContext(Dispatchers.IO) { probe(appContext) }
-            McpSettings.update { state ->
-                when {
-                    actual != null -> { confirmed = true; actual }
-                    state.running -> state.copy(running = false, starting = false)
-                    state.starting &&
-                        android.os.SystemClock.elapsedRealtime() - state.startedAt > START_TIMEOUT_MS ->
-                        state.copy(starting = false, error = "启动超时，请查看 Download/RainGit/logs")
-                    else -> state
-                }
-            }
-            emit(McpSettings.state.value)
+            // View-local only: never overwrite the service's starting state.
+            if (actual != null) confirmed = true
+            emit(actual ?: McpState())
             delay(if (confirmed) intervalMs else 400)
         }
     }.flowOn(Dispatchers.IO)
