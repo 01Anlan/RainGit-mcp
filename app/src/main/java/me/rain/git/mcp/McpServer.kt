@@ -1,115 +1,90 @@
 package me.rain.git.mcp
 
-import io.ktor.http.ContentType
-import io.ktor.http.HttpHeaders
-import io.ktor.http.HttpStatusCode
-import io.ktor.server.application.ApplicationCall
-import io.ktor.server.application.call
-import io.ktor.server.cio.CIO
-import io.ktor.server.engine.ApplicationEngine
-import io.ktor.server.engine.embeddedServer
-import io.ktor.server.request.httpMethod
-import io.ktor.server.request.receiveText
-import io.ktor.server.response.respondText
-import io.ktor.server.routing.get
-import io.ktor.server.routing.post
-import io.ktor.server.routing.routing
-import io.ktor.http.HttpMethod
+import com.sun.net.httpserver.HttpExchange
+import com.sun.net.httpserver.HttpServer
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.json.JSONException
 import org.json.JSONObject
+import java.net.InetSocketAddress
+import java.util.concurrent.Executors
 
-/** Minimal MCP 2025-03-26 Streamable HTTP server, without an external MCP runtime. */
+/** Android-safe MCP Streamable HTTP endpoint; no Ktor static initialization. */
 class McpServer(private val tools: McpTools) {
-    private var engine: ApplicationEngine? = null
+    private var server: HttpServer? = null
+    private var dispatcher: java.util.concurrent.ExecutorService? = null
 
     suspend fun start(port: Int) {
-        require(engine == null) { "MCP 已经启动" }
-        val server = embeddedServer(CIO, port = port, host = "127.0.0.1") {
-            routing {
-                get("/health") {
-                    call.respondText(JSONObject().put("status", "ok").put("name", "RainGit").toString(), ContentType.Application.Json)
-                }
-                post("/mcp") {
-                    val accept = call.request.headers[HttpHeaders.Accept].orEmpty()
-                    if (!accept.contains("application/json") && !accept.contains("*/*")) {
-                        call.respondText("Not Acceptable", status = HttpStatusCode.NotAcceptable)
-                        return@post
-                    }
-                    val body = try { JSONObject(call.receiveText()) }
-                    catch (_: JSONException) {
-                        call.jsonRpc(null, -32700, "Parse error"); return@post
-                    }
-                    if (body.getStringOrNull("jsonrpc") != "2.0" || !body.has("method")) {
-                        call.jsonRpc(body.opt("id"), -32600, "Invalid Request"); return@post
-                    }
-                    val id = body.opt("id")
-                    val method = body.getString("method")
-                    val params = body.optJSONObject("params") ?: JSONObject()
-                    try {
-                        when (method) {
-                            "initialize" -> {
-                                val version = params.optString("protocolVersion", "2025-03-26")
-                                val result = JSONObject()
-                                    .put("protocolVersion", version)
-                                    .put("capabilities", JSONObject().put("tools", JSONObject().put("listChanged", false)))
-                                    .put("serverInfo", JSONObject().put("name", "RainGit").put("version", "1.0.0"))
-                                    .put("instructions", "操作 RainGit 本地与 GitHub 仓库。repository 是本地仓库目录名；full_name 是 所有者/仓库名。文件操作、提交和推送受 MCP 页面的“允许修改与推送”开关控制。")
-                                call.jsonRpc(id, result = result)
-                            }
-                            "notifications/initialized", "notifications/cancelled" -> {
-                                call.respondText("", status = HttpStatusCode.Accepted)
-                            }
-                            "ping" -> call.jsonRpc(id, result = JSONObject())
-                            "tools/list" -> call.jsonRpc(id, result = JSONObject().put("tools", tools.definitions()))
-                            "tools/call" -> {
-                                val name = params.getString("name")
-                                val args = params.optJSONObject("arguments") ?: JSONObject()
-                                val result = try {
-                                    val text = tools.call(name, args)
-                                    McpSettings.update { it.copy(requests = it.requests + 1, lastTool = name, lastResult = "成功") }
-                                    JSONObject().put("content", org.json.JSONArray().put(JSONObject().put("type", "text").put("text", text))).put("isError", false)
-                                } catch (e: Exception) {
-                                    McpSettings.update { it.copy(requests = it.requests + 1, lastTool = name, lastResult = e.message ?: "失败") }
-                                    JSONObject().put("content", org.json.JSONArray().put(JSONObject().put("type", "text").put("text", e.message ?: "工具执行失败"))).put("isError", true)
-                                }
-                                call.jsonRpc(id, result = result)
-                            }
-                            else -> call.jsonRpc(id, -32601, "Method not found: $method")
-                        }
-                    } catch (e: Exception) {
-                        call.jsonRpc(id, -32602, e.message ?: "Invalid params")
-                    }
-                }
-            }
+        require(server == null) { "MCP 已经启动" }
+        val instance = HttpServer.create(InetSocketAddress("127.0.0.1", port), 32)
+        val executor = Executors.newCachedThreadPool { runnable ->
+            Thread(runnable, "RainGit-MCP").apply { isDaemon = true }
         }
-        engine = server
+        instance.executor = executor
+        instance.createContext("/health") { exchange ->
+            if (exchange.requestMethod != "GET") { exchange.respond(405, "Method Not Allowed"); return@createContext }
+            exchange.respond(200, JSONObject().put("status", "ok").put("name", "RainGit").toString())
+        }
+        instance.createContext("/mcp") { exchange ->
+            if (exchange.requestMethod != "POST") { exchange.respond(405, "Method Not Allowed"); return@createContext }
+            val id = try { handle(exchange.requestBody.bufferedReader(Charsets.UTF_8).readText()) }
+            catch (e: Exception) { error(null, -32603, e.message ?: "服务内部错误") }
+            exchange.respond(200, id)
+        }
+        server = instance; dispatcher = executor
+        try { instance.start() }
+        catch (e: Throwable) { close(); throw e }
+    }
+
+    private suspend fun handle(text: String): String = withContext(Dispatchers.IO) {
+        val body = try { JSONObject(text) } catch (_: JSONException) { return@withContext error(null, -32700, "JSON 格式错误") }
+        if (body.optString("jsonrpc") != "2.0" || !body.has("method")) return@withContext error(body.opt("id"), -32600, "JSON-RPC 请求格式错误")
+        val id = body.opt("id"); val method = body.getString("method")
+        val params = body.optJSONObject("params") ?: JSONObject()
         try {
-            server.start(wait = false)
-            val resolved = runCatching {
-                @Suppress("UNCHECKED_CAST")
-                (server.resolvedConnectors() as List<io.ktor.server.engine.EngineConnectorConfig>).first()
-            }.getOrElse {
-                engine = null; server.stop(0, 0); throw it
+            when (method) {
+                "initialize" -> result(id, JSONObject()
+                    .put("protocolVersion", params.optString("protocolVersion", "2025-03-26"))
+                    .put("capabilities", JSONObject().put("tools", JSONObject().put("listChanged", false)))
+                    .put("serverInfo", JSONObject().put("name", "RainGit").put("version", "1.1.0"))
+                    .put("instructions", "操作 RainGit 本地与 GitHub 仓库。repository 是本地仓库目录名；full_name 是 所有者/仓库名。"))
+                "notifications/initialized", "notifications/cancelled" -> ""
+                "ping" -> result(id, JSONObject())
+                "tools/list" -> result(id, JSONObject().put("tools", tools.definitions()))
+                "tools/call" -> {
+                    val name = params.getString("name")
+                    val args = params.optJSONObject("arguments") ?: JSONObject()
+                    val response = try {
+                        val text = tools.call(name, args)
+                        McpSettings.update { it.copy(requests = it.requests + 1, lastTool = name, lastResult = "成功") }
+                        JSONObject().put("content", org.json.JSONArray().put(JSONObject().put("type", "text").put("text", text))).put("isError", false)
+                    } catch (e: Exception) {
+                        McpSettings.update { it.copy(requests = it.requests + 1, lastTool = name, lastResult = e.message ?: "失败") }
+                        JSONObject().put("content", org.json.JSONArray().put(JSONObject().put("type", "text").put("text", e.message ?: "工具执行失败"))).put("isError", true)
+                    }
+                    result(id, response)
+                }
+                else -> error(id, -32601, "方法不存在：$method")
             }
-            check(resolved.port == port) { "端口 $port 启动失败" }
-        }
-        catch (e: Exception) { engine = null; server.stop(0, 0); throw e }
+        } catch (e: Exception) { error(id, -32602, e.message ?: "参数错误") }
     }
 
-    fun stop() {
-        engine?.stop(500, 1500)
-        engine = null
+    private fun result(id: Any?, result: JSONObject): String = JSONObject().put("jsonrpc", "2.0")
+        .put("id", id ?: JSONObject.NULL).put("result", result).toString()
+
+    private fun error(id: Any?, code: Int, message: String): String = JSONObject().put("jsonrpc", "2.0")
+        .put("id", id ?: JSONObject.NULL).put("error", JSONObject().put("code", code).put("message", message)).toString()
+
+    private fun HttpExchange.respond(status: Int, text: String) {
+        val data = text.toByteArray(Charsets.UTF_8)
+        responseHeaders.set("Content-Type", "application/json; charset=utf-8")
+        if (text.isEmpty()) sendResponseHeaders(202, -1)
+        else sendResponseHeaders(status, data.size.toLong())
+        if (data.isNotEmpty()) responseBody.use { it.write(data) } else close()
     }
 
-    fun close() { stop() }
-
-    private suspend fun ApplicationCall.jsonRpc(id: Any?, code: Int? = null, message: String? = null, result: JSONObject? = null) {
-        val response = JSONObject().put("jsonrpc", "2.0")
-        if (id == null || id == JSONObject.NULL) response.put("id", JSONObject.NULL) else response.put("id", id)
-        if (result != null) response.put("result", result)
-        else response.put("error", JSONObject().put("code", code ?: -32603).put("message", message ?: "Internal error"))
-        respondText(response.toString(), ContentType.Application.Json)
+    fun close() {
+        server?.stop(0); server = null
+        dispatcher?.shutdownNow(); dispatcher = null
     }
-
-    private fun JSONObject.getStringOrNull(name: String) = if (has(name) && !isNull(name)) getString(name) else null
 }
