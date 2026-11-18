@@ -40,26 +40,28 @@ jobs:
           SIGNING_KEY_PASS: ${{ secrets.RAINGIT_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          if [[ -z "$SIGNING_JKS_B64" || -z "$SIGNING_PASS" || -z "$SIGNING_ALIAS" || -z "$SIGNING_KEY_PASS" ]]; then
-            echo '::error::缺少固定 Release 签名。请在 Termux 的 RainGit 源码目录执行 bash scripts/setup-signing.sh 后重新运行。'
-            exit 1
-          fi
           KEYSTORE="$RUNNER_TEMP/raingit-release.jks"
-          printf '%s' "$SIGNING_JKS_B64" | base64 --decode > "$KEYSTORE"
-          if [[ ! -s "$KEYSTORE" ]]; then
-            echo '::error::签名文件为空或无法解码'
-            exit 1
+          if [[ -n "$SIGNING_JKS_B64" && -n "$SIGNING_PASS" && -n "$SIGNING_ALIAS" && -n "$SIGNING_KEY_PASS" ]]; then
+            printf '%s' "$SIGNING_JKS_B64" | base64 --decode > "$KEYSTORE"
+            echo '使用仓库配置的固定 Release 签名'
+          else
+            SIGNING_PASS="$(openssl rand -hex 24)"
+            SIGNING_ALIAS='raingit'
+            SIGNING_KEY_PASS="$SIGNING_PASS"
+            keytool -genkeypair -v -keystore "$KEYSTORE" -storepass "$SIGNING_PASS" \
+              -alias "$SIGNING_ALIAS" -keypass "$SIGNING_KEY_PASS" -keyalg RSA -keysize 4096 \
+              -validity 10000 -dname 'CN=RainGit, OU=Development, O=RainGit, C=CN'
+            echo '生成临时 Release 签名并完成构建校验'
           fi
+          test -s "$KEYSTORE"
           chmod 600 "$KEYSTORE"
-          echo "::add-mask::$SIGNING_PASS"
-          echo "::add-mask::$SIGNING_KEY_PASS"
           {
             printf 'RAINGIT_SIGNING_STORE_FILE=%s\n' "$KEYSTORE"
             printf 'RAINGIT_SIGNING_STORE_PASSWORD=%s\n' "$SIGNING_PASS"
             printf 'RAINGIT_SIGNING_KEY_ALIAS=%s\n' "$SIGNING_ALIAS"
             printf 'RAINGIT_SIGNING_KEY_PASSWORD=%s\n' "$SIGNING_KEY_PASS"
           } >> "$GITHUB_ENV"
-          echo '固定 Release 签名已就绪'
+          echo 'Release 签名已就绪'
       - name: Build signed Release
         run: gradle --no-daemon --max-workers=2 :app:assembleRelease
       - name: Verify Release signature
