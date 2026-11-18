@@ -38,6 +38,7 @@ class McpSettings(context: Context) {
 data class McpState(
     val running: Boolean = false,
     val starting: Boolean = false,
+    val startedAt: Long = 0L,
     val port: Int = 8765,
     val address: String = "127.0.0.1",
     val error: String? = null,
