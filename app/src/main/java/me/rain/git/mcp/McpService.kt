@@ -58,7 +58,7 @@ class McpService : Service() {
             server?.close(); server = null
         }
         if (McpSettings.state.value.starting) return START_STICKY
-        McpSettings.update { it.copy(running = false, starting = true, error = null, port = port) }
+        McpSettings.update { it.copy(running = false, starting = true, startedAt = android.os.SystemClock.elapsedRealtime(), error = null, port = port) }
         scope.launch {
             try {
                 diagnostic("开始前台通知")
@@ -151,7 +151,7 @@ class McpService : Service() {
 
         fun start(context: Context, port: Int) {
             if (McpSettings.state.value.running || McpSettings.state.value.starting) return
-            McpSettings.update { it.copy(starting = true, error = null, port = port) }
+            McpSettings.update { it.copy(starting = true, startedAt = android.os.SystemClock.elapsedRealtime(), error = null, port = port) }
             val intent = Intent(context, McpService::class.java).putExtra(EXTRA_PORT, port)
             try { context.startForegroundService(intent) }
             catch (error: Throwable) {
