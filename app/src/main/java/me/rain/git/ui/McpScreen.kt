@@ -48,6 +48,7 @@ internal fun McpScreen(vm: RainViewModel) {
     val gateway = remember { GitGateway(context) }
     val gatewayResults by gateway.results.collectAsState()
     var autoGateway by remember { mutableStateOf(gateway.automatic) }
+    var autoStart by remember { mutableStateOf(settings.autoStart) }
     val composeScope = rememberCoroutineScope()
     val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
     DisposableEffect(lifecycle) {
@@ -179,10 +180,15 @@ internal fun McpScreen(vm: RainViewModel) {
                 ListItem(headlineContent = { Text("打开软件自动启动 MCP") },
                     supportingContent = { Text("进入 RainGit 时按已保存的端口启动；已运行时不重复启动") },
                     leadingContent = { Icon(Icons.Rounded.PowerSettingsNew, null) },
-                    trailingContent = { Switch(settings.autoStart, {
-                        settings.autoStart = it
-                        if (it && !state.running && !state.starting) start()
-                        vm.mcpMessage(if (it) "已开启自动启动 MCP" else "已关闭自动启动 MCP")
+                    trailingContent = { Switch(autoStart, { checked ->
+                        autoStart = checked
+                        runCatching { settings.autoStart = checked }.onFailure {
+                            autoStart = !checked
+                            vm.mcpMessage("自动启动设置保存失败")
+                            return@Switch
+                        }
+                        if (checked && !state.running && !state.starting) composeScope.launch { start() }
+                        vm.mcpMessage(if (checked) "已开启自动启动 MCP" else "已关闭自动启动 MCP")
                     }) }, colors = ListItemDefaults.colors(containerColor = androidx.compose.ui.graphics.Color.Transparent))
                 HorizontalDivider(Modifier.padding(horizontal = 16.dp))
                 ListItem(headlineContent = { Text("悬浮控制窗") },

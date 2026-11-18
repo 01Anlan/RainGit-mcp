@@ -27,6 +27,16 @@ class McpService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    override fun onCreate() {
+        super.onCreate()
+        runCatching {
+            getSystemService(NotificationManager::class.java).createNotificationChannel(
+                NotificationChannel(CHANNEL, "MCP 服务", NotificationManager.IMPORTANCE_LOW))
+        }.onFailure {
+            McpSettings.update { state -> state.copy(error = "通知初始化失败：${it.message}") }
+        }
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP || (intent == null && server != null)) {
             stopServer(); return START_NOT_STICKY
