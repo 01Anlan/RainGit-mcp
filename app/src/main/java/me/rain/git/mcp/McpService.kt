@@ -57,7 +57,7 @@ class McpService : Service() {
         if (server != null) {
             server?.close(); server = null
         }
-        if (McpSettings.state.value.starting) return START_STICKY
+        if (isStartingNow()) return START_STICKY
         McpSettings.update { it.copy(running = false, starting = true, startedAt = android.os.SystemClock.elapsedRealtime(), error = null, port = port) }
         scope.launch {
             try {
@@ -145,12 +145,20 @@ class McpService : Service() {
     }
 
     companion object {
+        private const val START_TIMEOUT_MS = 12_000L
+
+        fun isStartingNow(): Boolean {
+            val state = McpSettings.state.value
+            return state.starting &&
+                android.os.SystemClock.elapsedRealtime() - state.startedAt < START_TIMEOUT_MS
+        }
+
         const val CHANNEL = "rain_mcp_server"
         const val ACTION_STOP = "me.rain.git.mcp.STOP"
         const val EXTRA_PORT = "port"
 
         fun start(context: Context, port: Int) {
-            if (McpSettings.state.value.running || McpSettings.state.value.starting) return
+            if (McpSettings.state.value.running || isStartingNow()) return
             McpSettings.update { it.copy(starting = true, startedAt = android.os.SystemClock.elapsedRealtime(), error = null, port = port) }
             val intent = Intent(context, McpService::class.java).putExtra(EXTRA_PORT, port)
             try { context.startForegroundService(intent) }
