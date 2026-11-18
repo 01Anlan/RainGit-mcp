@@ -97,7 +97,7 @@ class McpOverlayService : Service() {
         }
         button.setOnClickListener {
             val state = McpSettings.state.value
-            if (state.starting) return@setOnClickListener
+            if (McpService.isStartingNow()) return@setOnClickListener
             if (state.running) attempt("停止 MCP") { McpService.stop(this) }
             else attempt("启动 MCP") { McpService.start(this, McpSettings(this).port) }
         }
@@ -117,8 +117,9 @@ class McpOverlayService : Service() {
                 status.text = "MCP\n$summary"
                 status.contentDescription = "MCP $summary，点按打开 RainGit，拖动可移动"
                 button.text = if (it.running) "停止" else "启动"
-                button.isEnabled = !it.starting
-                button.alpha = if (it.starting) .55f else 1f
+                val busy = McpService.isStartingNow()
+                button.isEnabled = !busy
+                button.alpha = if (busy) .55f else 1f
                 button.background = rounded(if (it.running) Color.rgb(145, 56, 67) else Color.rgb(51, 95, 193), 14)
             }
         }
