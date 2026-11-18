@@ -59,7 +59,10 @@ class McpServer(private val tools: McpTools) {
             }
             require(offset == length) { "请求体不完整" }
             val response = when (path) {
-                "/health" -> if (method == "GET") JSONObject().put("status", "ok").put("name", "RainGit").toString() else ""
+                "/health" -> if (method == "GET") JSONObject().put("status", "ok").put("name", "RainGit")
+                    .put("requests", McpSettings.state.value.requests)
+                    .put("lastTool", McpSettings.state.value.lastTool ?: "")
+                    .put("lastResult", McpSettings.state.value.lastResult ?: "").toString() else ""
                 "/mcp" -> if (method == "POST") handle(String(body, Charsets.UTF_8)) else ""
                 else -> ""
             }
