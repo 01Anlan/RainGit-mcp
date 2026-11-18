@@ -77,7 +77,13 @@ class McpService : Service() {
 
     private fun reportFailure(prefix: String, error: Throwable) {
         val trace = error.stackTraceToString().takeLast(40_000)
-        runCatching { java.io.File(filesDir, "mcp-error.txt").writeText(trace) }
+        runCatching {
+            val directory = java.io.File(android.os.Environment.getExternalStoragePublicDirectory(
+                android.os.Environment.DIRECTORY_DOWNLOADS), "RainGit/logs")
+            directory.mkdirs()
+            java.io.File(directory, "mcp-latest.txt").writeText(trace)
+            java.io.File(directory, "mcp-${System.currentTimeMillis()}.log").writeText(trace)
+        }
         McpSettings.update { it.copy(running = false, starting = false,
             error = "$prefix：${error.javaClass.simpleName}: ${error.message}") }
     }
