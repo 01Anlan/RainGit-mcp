@@ -54,8 +54,11 @@ class McpService : Service() {
         val settings = McpSettings(this)
         val port = intent?.getIntExtra(EXTRA_PORT, settings.port) ?: settings.port
         if (server != null && activePort == port) return START_STICKY
-        if (server != null) stopServer()
-        McpSettings.update { it.copy(starting = true, error = null, port = port) }
+        if (server != null) {
+            server?.close(); server = null
+        }
+        if (McpSettings.state.value.starting) return START_STICKY
+        McpSettings.update { it.copy(running = false, starting = true, error = null, port = port) }
         scope.launch {
             try {
                 diagnostic("开始前台通知")
@@ -114,25 +117,24 @@ class McpService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         return NotificationCompat.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_rain_mark)
-            .setContentTitle("RainGit MCP 正在运行")
+            .setContentTitle("RainGit MCP 服务")
             .setContentText("http://127.0.0.1:$port/mcp · 仅本机访问")
             .setOngoing(true).setContentIntent(open)
             .addAction(0, "打开 RainGit", open)
-            .addAction(0, "关闭服务", stop)
+            .addAction(0, "停止服务", stop)
             .build()
     }
 
     private fun stopServer() {
         server?.close(); server = null
         McpSettings.update { it.copy(running = false, starting = false, error = null) }
-        stopService(Intent(this, McpOverlayService::class.java))
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
 
     private fun updateOverlay() {
         if (McpSettings(this).overlayEnabled && Settings.canDrawOverlays(this))
-            startService(Intent(this, McpOverlayService::class.java))
+            runCatching { startService(Intent(this, McpOverlayService::class.java)) }
     }
 
     override fun onDestroy() {
@@ -148,8 +150,15 @@ class McpService : Service() {
         const val EXTRA_PORT = "port"
 
         fun start(context: Context, port: Int) {
+            if (McpSettings.state.value.running || McpSettings.state.value.starting) return
+            McpSettings.update { it.copy(starting = true, error = null, port = port) }
             val intent = Intent(context, McpService::class.java).putExtra(EXTRA_PORT, port)
-            context.startForegroundService(intent)
+            try { context.startForegroundService(intent) }
+            catch (error: Throwable) {
+                McpSettings.update { it.copy(starting = false,
+                    error = "启动请求失败：${error.message ?: error.javaClass.simpleName}") }
+                throw error
+            }
         }
 
         fun stop(context: Context) {

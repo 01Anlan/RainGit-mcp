@@ -11,6 +11,8 @@ import android.provider.Settings
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
+import android.widget.Toast
 import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -31,8 +33,8 @@ class McpOverlayService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (!Settings.canDrawOverlays(this)) { stopSelf(); return START_NOT_STICKY }
-        if (view == null) showOverlay()
+        if (!McpSettings(this).overlayEnabled || !Settings.canDrawOverlays(this)) { stopSelf(); return START_NOT_STICKY }
+        if (view == null && runCatching { showOverlay() }.isFailure) stopSelf()
         return START_NOT_STICKY
     }
 
@@ -41,59 +43,90 @@ class McpOverlayService : Service() {
         val wm = getSystemService(WindowManager::class.java).also { window = it }
         val density = resources.displayMetrics.density
         fun dp(value: Int) = (value * density).toInt()
-        val status = TextView(this).apply {
-            text = "MCP 已停止"; setTextColor(Color.WHITE); textSize = 13f; gravity = Gravity.CENTER
-            setPadding(dp(12), 0, dp(8), 0)
+        fun rounded(color: Int, radius: Int) = GradientDrawable().apply {
+            cornerRadius = dp(radius).toFloat(); setColor(color)
         }
-        val button = TextView(this).apply {
-            text = "启动"; setTextColor(Color.WHITE); textSize = 13f; gravity = Gravity.CENTER
-            setPadding(dp(12), 0, dp(12), 0)
-            background = GradientDrawable().apply { cornerRadius = dp(20).toFloat(); setColor(Color.rgb(55, 103, 214)) }
+        fun label(value: String, size: Float) = TextView(this).apply {
+            text = value; setTextColor(Color.WHITE); textSize = size; gravity = Gravity.CENTER
         }
+        val status = label("MCP\n已停止", 12f).apply { setPadding(dp(10), 0, dp(10), 0) }
+        val button = label("启动", 14f)
+        val hide = label("×", 22f).apply { contentDescription = "隐藏 MCP 悬浮窗" }
         val content = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER
-            setPadding(dp(4), dp(6), dp(4), dp(6))
-            background = GradientDrawable().apply {
-                cornerRadius = dp(24).toFloat(); setColor(Color.rgb(32, 36, 46)); setStroke(dp(1), Color.rgb(72, 79, 94))
-            }
-            addView(status, LinearLayout.LayoutParams(dp(130), dp(34)))
-            addView(button, LinearLayout.LayoutParams(dp(64), dp(34)))
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(4), dp(4), dp(4), dp(4))
+            background = rounded(Color.rgb(31, 36, 48), 18).apply { setStroke(dp(1), Color.rgb(74, 83, 101)) }
+            elevation = dp(5).toFloat()
+            addView(status, LinearLayout.LayoutParams(dp(94), dp(48)))
+            addView(button, LinearLayout.LayoutParams(dp(62), dp(48)))
+            addView(hide, LinearLayout.LayoutParams(dp(48), dp(48)))
         }
         val params = WindowManager.LayoutParams(WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT).apply {
-            gravity = Gravity.TOP or Gravity.END; x = dp(12); y = dp(120)
+            gravity = Gravity.TOP or Gravity.RIGHT; x = dp(12); y = dp(120)
+        }
+        val slop = ViewConfiguration.get(this).scaledTouchSlop
+        status.setOnClickListener {
+            attempt("打开 RainGit") {
+                startActivity(Intent(this, MainActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP))
+            }
         }
         var initialX = 0; var initialY = 0; var touchX = 0f; var touchY = 0f; var moved = false
-        content.setOnTouchListener { _, event ->
-            when (event.action) {
+        status.setOnTouchListener { target, event ->
+            when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     initialX = params.x; initialY = params.y; touchX = event.rawX; touchY = event.rawY; moved = false; true
                 }
                 MotionEvent.ACTION_MOVE -> {
                     val dx = event.rawX - touchX; val dy = event.rawY - touchY
-                    if (dx * dx + dy * dy > dp(8) * dp(8)) moved = true
-                    params.x = initialX - dx.toInt(); params.y = initialY + dy.toInt()
-                    wm.updateViewLayout(content, params); true
-                }
-                MotionEvent.ACTION_UP -> {
-                    if (!moved) startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    if (dx * dx + dy * dy > slop * slop) moved = true
+                    if (moved) {
+                        val bounds = wm.currentWindowMetrics.bounds
+                        params.x = (initialX - dx.toInt()).coerceIn(0, (bounds.width() - content.width).coerceAtLeast(0))
+                        params.y = (initialY + dy.toInt()).coerceIn(0, (bounds.height() - content.height).coerceAtLeast(0))
+                        runCatching { wm.updateViewLayout(content, params) }
+                    }
                     true
                 }
+                MotionEvent.ACTION_UP -> { if (!moved) target.performClick(); true }
+                MotionEvent.ACTION_CANCEL -> true
                 else -> false
             }
         }
         button.setOnClickListener {
             val state = McpSettings.state.value
-            if (state.running || state.starting) McpService.stop(this)
-            else McpService.start(this, McpSettings(this).port)
+            if (state.starting) return@setOnClickListener
+            if (state.running) attempt("停止 MCP") { McpService.stop(this) }
+            else attempt("启动 MCP") { McpService.start(this, McpSettings(this).port) }
+        }
+        hide.setOnClickListener {
+            McpSettings(this).overlayEnabled = false
+            stopSelf()
         }
         wm.addView(content, params); view = content
         scope.launch {
             McpSettings.state.collectLatest {
-                status.text = if (it.running) "MCP · :${it.port}" else if (it.starting) "MCP 启动中" else "MCP 已停止"
-                button.text = if (it.running || it.starting) "关闭" else "启动"
+                val summary = when {
+                    it.starting -> "启动中…"
+                    it.running -> "运行中 · ${it.port}"
+                    it.error != null -> "启动失败"
+                    else -> "已停止"
+                }
+                status.text = "MCP\n$summary"
+                status.contentDescription = "MCP $summary，点按打开 RainGit，拖动可移动"
+                button.text = if (it.running) "停止" else "启动"
+                button.isEnabled = !it.starting
+                button.alpha = if (it.starting) .55f else 1f
+                button.background = rounded(if (it.running) Color.rgb(145, 56, 67) else Color.rgb(51, 95, 193), 14)
             }
+        }
+    }
+
+    private fun attempt(action: String, block: () -> Unit) {
+        runCatching(block).onFailure {
+            Toast.makeText(this, "${action}失败，请打开 RainGit 查看", Toast.LENGTH_SHORT).show()
         }
     }
 

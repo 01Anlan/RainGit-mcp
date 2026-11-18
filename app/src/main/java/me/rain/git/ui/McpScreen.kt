@@ -1,6 +1,5 @@
 package me.rain.git.ui
 
-import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -21,6 +20,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -43,6 +43,10 @@ internal fun McpScreen(vm: RainViewModel) {
     val state by McpSettings.state.collectAsState()
     var port by remember { mutableStateOf(settings.port.toString()) }
     var overlay by remember { mutableStateOf(settings.overlayEnabled && Settings.canDrawOverlays(context)) }
+    var awaitingOverlay by rememberSaveable { mutableStateOf(false) }
+    var allowWrites by remember { mutableStateOf(settings.allowWrites) }
+    val validPort = port.toIntOrNull()?.takeIf { it in 1024..65535 }
+    val endpoint = "http://${state.address}:${if (state.running || state.starting) state.port else settings.port}/mcp"
     var battery by remember { mutableStateOf(isIgnoringBattery(context)) }
     var expanded by remember { mutableStateOf(false) }
     val gateway = remember { GitGateway(context) }
@@ -51,12 +55,32 @@ internal fun McpScreen(vm: RainViewModel) {
     var autoStart by remember { mutableStateOf(settings.autoStart) }
     val composeScope = rememberCoroutineScope()
     val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+    val setOverlay: (Boolean) -> Unit = { enabled ->
+        runCatching {
+            val intent = Intent(context, McpOverlayService::class.java)
+            val previous = settings.overlayEnabled
+            settings.overlayEnabled = enabled
+            try {
+                if (enabled) context.startService(intent) else context.stopService(intent)
+            } catch (error: Exception) {
+                settings.overlayEnabled = previous
+                throw error
+            }
+            overlay = enabled
+        }.onFailure { vm.mcpMessage("悬浮窗操作失败，请检查系统权限") }
+    }
+    val overlayPermission = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        if (awaitingOverlay) {
+            awaitingOverlay = false
+            if (Settings.canDrawOverlays(context)) setOverlay(true)
+            else vm.mcpMessage("未授予悬浮窗权限，MCP 服务不受影响")
+        }
+    }
     DisposableEffect(lifecycle) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 overlay = settings.overlayEnabled && Settings.canDrawOverlays(context)
-                if (overlay && !McpSettings.state.value.running)
-                    runCatching { context.startService(Intent(context, McpOverlayService::class.java)) }
+                if (overlay) setOverlay(true)
                 battery = isIgnoringBattery(context)
             }
         }
@@ -68,7 +92,8 @@ internal fun McpScreen(vm: RainViewModel) {
         runCatching {
             val value = port.toInt()
             settings.port = value
-            if (Build.VERSION.SDK_INT >= 33)
+            if (Build.VERSION.SDK_INT >= 33 && !state.running &&
+                context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED)
                 notificationPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
             McpService.start(context, value)
         }.onFailure { vm.mcpMessage(it.message ?: "端口或启动参数无效") }
@@ -85,7 +110,7 @@ internal fun McpScreen(vm: RainViewModel) {
                     Spacer(Modifier.width(13.dp))
                     Column(Modifier.weight(1f)) {
                         Text("RainGit MCP", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-                        Text("让 AI 直接读取、编辑和发布仓库", style = MaterialTheme.typography.bodySmall)
+                        Text("让本机 MCP 客户端访问 RainGit 仓库", style = MaterialTheme.typography.bodySmall)
                     }
                     StateLabel(if (state.running) "运行中" else if (state.starting) "启动中" else "已停止")
                 }
@@ -94,14 +119,14 @@ internal fun McpScreen(vm: RainViewModel) {
                     if (state.running || state.starting) {
                         Button(onClick = { McpService.stop(context) }, modifier = Modifier.weight(1f).height(50.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) {
-                            Icon(Icons.Rounded.Stop, null); Spacer(Modifier.width(7.dp)); Text("关闭服务")
+                            Icon(Icons.Rounded.Stop, null); Spacer(Modifier.width(7.dp)); Text("停止服务")
                         }
                     } else {
-                        Button(onClick = start, modifier = Modifier.weight(1f).height(50.dp), enabled = port.toIntOrNull() in 1024..65535) {
+                        Button(onClick = start, modifier = Modifier.weight(1f).height(50.dp), enabled = validPort != null) {
                             Icon(Icons.Rounded.PlayArrow, null); Spacer(Modifier.width(7.dp)); Text("启动服务")
                         }
                     }
-                    if (state.running && port.toIntOrNull() != state.port) {
+                    if (state.running && validPort != null && validPort != state.port) {
                         FilledTonalButton(onClick = start, modifier = Modifier.height(50.dp)) { Text("保存并重启") }
                     }
                 }
@@ -111,46 +136,51 @@ internal fun McpScreen(vm: RainViewModel) {
             }
         }
 
-        SectionHeading("连接", "Streamable HTTP · 默认只允许本机客户端访问")
+        SectionHeading("连接", "仅限本机连接 · Streamable HTTP")
         Surface(color = MaterialTheme.colorScheme.surfaceContainerLow,
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = .65f)), shape = RoundedCornerShape(22.dp)) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedTextField(port, { port = it.filter(Char::isDigit).take(5) }, modifier = Modifier.fillMaxWidth(),
                     label = { Text("监听端口") }, singleLine = true, enabled = !state.starting,
-                    supportingText = { Text("1024–65535；运行中修改后请点击保存并重启") },
+                    isError = validPort == null,
+                    supportingText = { Text(when {
+                        validPort == null -> "请输入 1024 到 65535 之间的端口号"
+                        state.running -> "修改端口后，点「保存并重启」生效。"
+                        else -> "启动服务时会保存此端口。"
+                    }) },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), leadingIcon = { Icon(Icons.Rounded.Lan, null) })
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        Text("MCP 地址", style = MaterialTheme.typography.labelMedium)
-                        Text("http://${state.address}:${if (state.running) state.port else port}/mcp",
+                        Text("客户端地址", style = MaterialTheme.typography.labelMedium)
+                        Text(endpoint,
                             style = MaterialTheme.typography.bodyMedium, fontFamily = FontFamily.Monospace)
                     }
                     IconButton(onClick = {
                         val clipboard = context.getSystemService(ClipboardManager::class.java)
-                        clipboard.setPrimaryClip(ClipData.newPlainText("RainGit MCP", "http://${state.address}:${if (state.running) state.port else port}/mcp"))
+                        clipboard.setPrimaryClip(ClipData.newPlainText("RainGit MCP", endpoint))
                         vm.mcpMessage("MCP 地址已复制")
                     }) { Icon(Icons.Rounded.ContentCopy, "复制地址") }
                 }
                 HorizontalDivider()
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        Text("允许修改与推送", fontWeight = FontWeight.SemiBold)
-                        Text("关闭后只保留查询、读取和日志工具", style = MaterialTheme.typography.bodySmall,
+                        Text("允许工具修改仓库", fontWeight = FontWeight.SemiBold)
+                        Text("关闭后，客户端仍可调用查询工具，但修改请求会被拦截。", style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                    Switch(settings.allowWrites, { settings.allowWrites = it; vm.mcpMessage(if (it) "修改类工具已启用" else "已切换为只读模式") })
+                    Switch(allowWrites, { settings.allowWrites = it; allowWrites = it; vm.mcpMessage(if (it) "修改类工具已启用" else "已切换为只读模式") })
                 }
             }
         }
 
-        SectionHeading("GitHub 加速", "仅用于公开仓库克隆、Fetch 和 Pull，不转发 Token")
+        SectionHeading("GitHub 加速", "公共通道不接收 GitHub 登录凭证。")
         Surface(color = MaterialTheme.colorScheme.surfaceContainerLow,
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = .65f)), shape = RoundedCornerShape(22.dp)) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text("自动选择最快通道", fontWeight = FontWeight.SemiBold)
-                        Text("测速成功后自动切换，失败节点跳过", style = MaterialTheme.typography.bodySmall,
+                        Text("测速结束后，优先使用响应最快的可用通道。", style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     Switch(autoGateway, { autoGateway = it; gateway.automatic = it })
@@ -158,7 +188,7 @@ internal fun McpScreen(vm: RainViewModel) {
                 FilledTonalButton(onClick = { composeScope.launch { gateway.measure() } },
                     enabled = !gatewayResults.testing, modifier = Modifier.fillMaxWidth()) {
                     Icon(Icons.Rounded.NetworkCheck, null); Spacer(Modifier.width(7.dp))
-                    Text(if (gatewayResults.testing) "正在并行测速…" else "立即测速并选择")
+                    Text(if (gatewayResults.testing) "正在测速…" else "测试连接速度")
                 }
                 Text(gatewayResults.message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
                 gatewayResults.items.forEach { item ->
@@ -173,18 +203,17 @@ internal fun McpScreen(vm: RainViewModel) {
             }
         }
 
-        SectionHeading("后台与控制", "前台服务保持 MCP 运行，以下权限均可独立设置")
+        SectionHeading("后台与控制", "离开页面后，MCP 可通过前台服务继续运行。")
         Surface(color = MaterialTheme.colorScheme.surfaceContainerLow,
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = .65f)), shape = RoundedCornerShape(22.dp)) {
             Column {
-                ListItem(headlineContent = { Text("打开软件自动启动 MCP") },
-                    supportingContent = { Text("进入 RainGit 时按已保存的端口启动；已运行时不重复启动") },
+                ListItem(headlineContent = { Text("打开 RainGit 时启动 MCP") },
+                    supportingContent = { Text("下次打开 RainGit 时，使用已保存的端口启动。") },
                     leadingContent = { Icon(Icons.Rounded.PowerSettingsNew, null) },
                     trailingContent = { Switch(checked = autoStart, onCheckedChange = { checked ->
                         autoStart = checked
                         try {
                             settings.autoStart = checked
-                            if (checked && !state.running && !state.starting) composeScope.launch { start() }
                             vm.mcpMessage(if (checked) "已开启自动启动 MCP" else "已关闭自动启动 MCP")
                         } catch (error: Exception) {
                             autoStart = settings.autoStart
@@ -193,21 +222,23 @@ internal fun McpScreen(vm: RainViewModel) {
                     }) }, colors = ListItemDefaults.colors(containerColor = androidx.compose.ui.graphics.Color.Transparent))
                 HorizontalDivider(Modifier.padding(horizontal = 16.dp))
                 ListItem(headlineContent = { Text("悬浮控制窗") },
-                    supportingContent = { Text(if (overlay) "已开启，可拖动并快速启停 MCP" else "显示服务状态、启动和关闭按钮") },
+                    supportingContent = { Text(if (overlay) "拖动状态区可移动；点「×」可隐藏悬浮窗。" else "在其他应用上查看状态、启动或停止 MCP。") },
                     leadingContent = { Icon(Icons.Rounded.PictureInPictureAlt, null) },
                     trailingContent = { Switch(overlay, { checked ->
                         if (checked && !Settings.canDrawOverlays(context)) {
-                            runCatching { context.startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${context.packageName}"))) }
-                                .onFailure { vm.mcpMessage("请在系统设置中允许显示悬浮窗") }
-                        } else {
-                            settings.overlayEnabled = checked; overlay = checked
-                            if (checked) context.startService(Intent(context, McpOverlayService::class.java))
-                            else context.stopService(Intent(context, McpOverlayService::class.java))
-                        }
-                    }) }, colors = ListItemDefaults.colors(containerColor = androidx.compose.ui.graphics.Color.Transparent))
+                            awaitingOverlay = true
+                            runCatching {
+                                overlayPermission.launch(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                    Uri.parse("package:${context.packageName}")))
+                            }.onFailure {
+                                awaitingOverlay = false
+                                vm.mcpMessage("请在系统设置中允许 RainGit 显示悬浮窗")
+                            }
+                        } else setOverlay(checked)
+                    }, enabled = !awaitingOverlay) }, colors = ListItemDefaults.colors(containerColor = androidx.compose.ui.graphics.Color.Transparent))
                 HorizontalDivider(Modifier.padding(horizontal = 16.dp))
-                ListItem(headlineContent = { Text("后台无限制运行") },
-                    supportingContent = { Text(if (battery) "系统已设置为不限制" else "将 RainGit 加入电池优化白名单") },
+                ListItem(headlineContent = { Text("电池优化") },
+                    supportingContent = { Text(if (battery) "已允许 RainGit 忽略电池优化" else "可放宽后台限制；系统仍可能停止服务。") },
                     leadingContent = { Icon(Icons.Rounded.BatterySaver, null) },
                     trailingContent = { TextButton(onClick = {
                         val intent = if (!battery) Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${context.packageName}"))
@@ -219,7 +250,7 @@ internal fun McpScreen(vm: RainViewModel) {
             }
         }
 
-        SectionHeading("运行记录", "凭证、文件正文不会写入请求记录")
+        SectionHeading("调用记录", "显示本次进程的调用次数和最近一次调用。")
         Surface(color = MaterialTheme.colorScheme.surfaceContainerLow,
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = .65f)), shape = RoundedCornerShape(22.dp)) {
             Column(Modifier.padding(16.dp)) {
@@ -234,7 +265,7 @@ internal fun McpScreen(vm: RainViewModel) {
                         color = if (state.lastResult == "成功") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
                 } else Text("暂无调用", Modifier.padding(top = 7.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
                 TextButton(onClick = { expanded = !expanded }, modifier = Modifier.align(Alignment.End)) {
-                    Text(if (expanded) "收起工具清单" else "查看工具清单")
+                    Text(if (expanded) "收起工具列表" else "查看工具列表")
                     Icon(if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore, null)
                 }
                 if (expanded) toolDescriptions.forEach { (name, description) ->
@@ -278,7 +309,7 @@ private val toolDescriptions = linkedMapOf(
     "create_stash" to "保存修改到 Stash",
     "apply_stash" to "恢复最近一次 Stash",
     "list_workflows" to "列出 Actions 工作流",
-    "list_workflow_runs" to "列出 Actions 运行记录",
+    "list_workflow_runs" to "列出 Actions 调用记录",
     "get_workflow_run" to "查看运行、任务和步骤",
     "get_workflow_logs" to "读取构建日志",
     "dispatch_workflow" to "手动触发工作流",
