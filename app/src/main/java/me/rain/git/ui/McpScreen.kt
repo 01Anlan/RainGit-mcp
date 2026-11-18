@@ -180,15 +180,16 @@ internal fun McpScreen(vm: RainViewModel) {
                 ListItem(headlineContent = { Text("打开软件自动启动 MCP") },
                     supportingContent = { Text("进入 RainGit 时按已保存的端口启动；已运行时不重复启动") },
                     leadingContent = { Icon(Icons.Rounded.PowerSettingsNew, null) },
-                    trailingContent = { Switch(autoStart, { checked ->
+                    trailingContent = { Switch(checked = autoStart, onCheckedChange = { checked ->
                         autoStart = checked
-                        runCatching { settings.autoStart = checked }.onFailure {
-                            autoStart = !checked
-                            vm.mcpMessage("自动启动设置保存失败")
-                            return@Switch
+                        try {
+                            settings.autoStart = checked
+                            if (checked && !state.running && !state.starting) composeScope.launch { start() }
+                            vm.mcpMessage(if (checked) "已开启自动启动 MCP" else "已关闭自动启动 MCP")
+                        } catch (error: Exception) {
+                            autoStart = settings.autoStart
+                            vm.mcpMessage("自动启动设置失败：${error.message}")
                         }
-                        if (checked && !state.running && !state.starting) composeScope.launch { start() }
-                        vm.mcpMessage(if (checked) "已开启自动启动 MCP" else "已关闭自动启动 MCP")
                     }) }, colors = ListItemDefaults.colors(containerColor = androidx.compose.ui.graphics.Color.Transparent))
                 HorizontalDivider(Modifier.padding(horizontal = 16.dp))
                 ListItem(headlineContent = { Text("悬浮控制窗") },
