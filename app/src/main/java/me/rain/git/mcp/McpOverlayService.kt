@@ -107,7 +107,7 @@ class McpOverlayService : Service() {
         }
         wm.addView(content, params); view = content
         scope.launch {
-            McpSettings.state.collectLatest {
+            McpStatus.updates(this@McpOverlayService).collect {
                 val summary = when {
                     it.starting -> "启动中…"
                     it.running -> "运行中 · ${it.port}"
