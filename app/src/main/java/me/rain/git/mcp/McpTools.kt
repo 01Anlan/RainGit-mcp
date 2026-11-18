@@ -347,17 +347,7 @@ class McpTools(context: Context, private val settings: McpSettings) {
         "updated_at" to i.updated, "comments" to i.comments, "draft" to i.draft)
 
     companion object {
-        private val repoSchema = schema("repository" to "string", required = listOf("repository"))
-        private val remoteSchema = schema("full_name" to "string", required = listOf("full_name"))
-        private val runSchema = schema("full_name" to "string", "run_id" to "integer", required = listOf("full_name", "run_id"))
-        private val pathSchema = schema("repository" to "string", "path" to "string", required = listOf("repository", "path"))
-
-        private fun schema(vararg properties: Pair<String, String>, required: List<String> = emptyList()) =
-            JSONObject().put("type", "object").put("properties", JSONObject().apply {
-                properties.forEach { (name, type) -> put(name, JSONObject().put("type", type).put("description", parameterDescriptions[name].orEmpty())) }
-            }).put("required", JSONArray(required)).put("additionalProperties", false).toString()
-
-        private val parameterDescriptions = mapOf(
+        private val parameterDescriptions by lazy { mapOf(
             "repository" to "本地仓库目录名，可通过 list_local_repositories 查询",
             "full_name" to "GitHub 仓库全名，格式为 所有者/仓库名",
             "path" to "仓库内的相对文件路径；暂存或取消暂存全部文件时填 .",
@@ -388,6 +378,17 @@ class McpTools(context: Context, private val settings: McpSettings) {
             "side" to "代码方向：RIGHT 表示新代码，LEFT 表示旧代码，默认 RIGHT",
             "sha" to "目标提交的完整 40 位 SHA",
             "tag" to "要创建的远程标签名称"
-        )
+        ) }
+
+        private val repoSchema = schema("repository" to "string", required = listOf("repository"))
+        private val remoteSchema = schema("full_name" to "string", required = listOf("full_name"))
+        private val runSchema = schema("full_name" to "string", "run_id" to "integer", required = listOf("full_name", "run_id"))
+        private val pathSchema = schema("repository" to "string", "path" to "string", required = listOf("repository", "path"))
+
+        private fun schema(vararg properties: Pair<String, String>, required: List<String> = emptyList()) =
+            JSONObject().put("type", "object").put("properties", JSONObject().apply {
+                properties.forEach { (name, type) -> put(name, JSONObject().put("type", type).put("description", parameterDescriptions[name].orEmpty())) }
+            }).put("required", JSONArray(required)).put("additionalProperties", false).toString()
+
     }
 }
