@@ -58,9 +58,15 @@ class McpService : Service() {
         McpSettings.update { it.copy(starting = true, error = null, port = port) }
         scope.launch {
             try {
+                diagnostic("开始前台通知")
                 startForegroundWithNotification(port)
-                val instance = McpServer(McpTools(applicationContext, settings))
+                diagnostic("初始化工具注册表")
+                val toolRegistry = McpTools(applicationContext, settings)
+                diagnostic("创建 Socket 服务")
+                val instance = McpServer(toolRegistry)
+                diagnostic("绑定端口 $port")
                 instance.start(port)
+                diagnostic("MCP 启动成功")
                 server = instance
                 activePort = port
                 McpSettings.update { it.copy(running = true, starting = false, port = port, error = null) }
@@ -75,14 +81,18 @@ class McpService : Service() {
         return START_STICKY
     }
 
+    private fun logFile(name: String) = java.io.File(java.io.File(android.os.Environment.getExternalStoragePublicDirectory(
+        android.os.Environment.DIRECTORY_DOWNLOADS), "RainGit/logs").apply { mkdirs() }, name)
+
+    private fun diagnostic(message: String) {
+        runCatching { logFile("mcp-stage.txt").appendText("${System.currentTimeMillis()} $message\n") }
+    }
+
     private fun reportFailure(prefix: String, error: Throwable) {
-        val trace = error.stackTraceToString().takeLast(40_000)
+        val trace = "$prefix\n" + error.stackTraceToString().takeLast(40_000)
         runCatching {
-            val directory = java.io.File(android.os.Environment.getExternalStoragePublicDirectory(
-                android.os.Environment.DIRECTORY_DOWNLOADS), "RainGit/logs")
-            directory.mkdirs()
-            java.io.File(directory, "mcp-latest.txt").writeText(trace)
-            java.io.File(directory, "mcp-${System.currentTimeMillis()}.log").writeText(trace)
+            logFile("mcp-latest.txt").writeText(trace)
+            logFile("mcp-${System.currentTimeMillis()}.log").writeText(trace)
         }
         McpSettings.update { it.copy(running = false, starting = false,
             error = "$prefix：${error.javaClass.simpleName}: ${error.message}") }
