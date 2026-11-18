@@ -5,52 +5,52 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
-import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
+import kotlinx.coroutines.withContext
+import java.net.InetSocketAddress
+import java.net.Socket
 
-/** The HTTP listener is the source of truth, including after process recreation. */
+/**
+ * The listening socket is the source of truth. A plain TCP connect avoids the app's
+ * cleartext-HTTP policy, which blocks requests to http://127.0.0.1.
+ */
 object McpStatus {
-    fun running(context: Context): McpState? {
-        val port = McpSettings(context).port
-        val connection = runCatching {
-            URL("http://127.0.0.1:$port/health").openConnection() as HttpURLConnection
-        }.getOrNull() ?: return null
-        return try {
-            connection.connectTimeout = 700
-            connection.readTimeout = 700
-            connection.useCaches = false
-            connection.requestMethod = "GET"
-            if (connection.responseCode != 200) return null
-            val text = connection.inputStream.bufferedReader().readText()
-            val json = JSONObject(text)
-            if (json.optString("name") != "RainGit") null
-            else McpState(running = true, port = port,
-                lastTool = json.optString("lastTool").ifEmpty { null },
-                lastResult = json.optString("lastResult").ifEmpty { null },
-                requests = json.optLong("requests"))
-        } catch (_: Exception) { null }
-        finally { connection.disconnect() }
+    private const val START_TIMEOUT_MS = 12_000L
+
+    fun listeningPort(context: Context): Int {
+        val state = McpSettings.state.value
+        return if (state.port in 1024..65535) state.port else McpSettings(context).port
     }
 
-    fun updates(context: Context, intervalMs: Long = 1000) = flow {
+    fun isListening(port: Int): Boolean = runCatching {
+        Socket().use { it.connect(InetSocketAddress("127.0.0.1", port), 400) }
+        true
+    }.getOrDefault(false)
+
+    fun probe(context: Context): McpState? {
+        val port = listeningPort(context)
+        if (!isListening(port)) return null
+        val local = McpSettings.state.value
+        return McpState(running = true, starting = false, port = port,
+            lastTool = local.lastTool, lastResult = local.lastResult, requests = local.requests)
+    }
+
+    fun updates(context: Context, intervalMs: Long = 800) = flow {
         val appContext = context.applicationContext
+        var confirmed = false
         while (true) {
-            val actual = kotlinx.coroutines.withContext(Dispatchers.IO) { running(appContext) }
-            if (actual != null) {
-                val local = McpSettings.state.value
-                McpSettings.update { actual.copy(
-                    starting = local.starting && SystemClockState.elapsed(local) < 15_000L,
-                    error = if (local.starting) local.error else null) }
-            } else if (McpSettings.state.value.running) {
-                McpSettings.update { it.copy(running = false, starting = false) }
+            val actual = withContext(Dispatchers.IO) { probe(appContext) }
+            McpSettings.update { state ->
+                when {
+                    actual != null -> { confirmed = true; actual }
+                    state.running -> state.copy(running = false, starting = false)
+                    state.starting &&
+                        android.os.SystemClock.elapsedRealtime() - state.startedAt > START_TIMEOUT_MS ->
+                        state.copy(starting = false, error = "启动超时，请查看 Download/RainGit/logs")
+                    else -> state
+                }
             }
             emit(McpSettings.state.value)
-            delay(intervalMs)
+            delay(if (confirmed) intervalMs else 400)
         }
     }.flowOn(Dispatchers.IO)
-}
-
-private object SystemClockState {
-    fun elapsed(state: McpState) = android.os.SystemClock.elapsedRealtime() - state.startedAt
 }
