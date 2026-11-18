@@ -53,7 +53,7 @@ class McpServer(private val tools: McpTools) {
                                     .put("protocolVersion", version)
                                     .put("capabilities", JSONObject().put("tools", JSONObject().put("listChanged", false)))
                                     .put("serverInfo", JSONObject().put("name", "RainGit").put("version", "1.0.0"))
-                                    .put("instructions", "Operate RainGit repositories. repository is a local directory name; full_name is owner/name for GitHub tools.")
+                                    .put("instructions", "操作 RainGit 本地与 GitHub 仓库。repository 是本地仓库目录名；full_name 是 所有者/仓库名。文件操作、提交和推送受 MCP 页面的“允许修改与推送”开关控制。")
                                 call.jsonRpc(id, result = result)
                             }
                             "notifications/initialized", "notifications/cancelled" -> {

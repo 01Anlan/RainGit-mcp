@@ -12,10 +12,18 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
 
-class LocalGit(private val token: () -> String?) {
-    private fun auth(): CredentialsProvider = UsernamePasswordCredentialsProvider(
-        "x-access-token", token() ?: throw IOException("GitHub 登录已失效")
-    )
+class LocalGit(private val token: () -> String?, private val gateway: me.rain.git.github.GitGateway? = null) {
+    private fun auth(): CredentialsProvider? = token()?.let {
+        UsernamePasswordCredentialsProvider("x-access-token", it)
+    }
+
+    private fun readCredentials(): CredentialsProvider? = if (gateway?.channel()?.id == "official") auth() else null
+
+    fun remoteUrl(dir: File): String = gitRemoteUrl(dir)
+
+    private fun gitRemoteUrl(dir: File): String = openGit(dir).use {
+        it.repository.config.getString("remote", "origin", "url").orEmpty()
+    }
 
     // JGit 6.10's automatic GC uses java.lang.ProcessHandle, unavailable on Android.
     // Both limits must be disabled: JGit checks pack count separately from loose objects.
@@ -50,8 +58,8 @@ class LocalGit(private val token: () -> String?) {
         require(!dir.exists() || dir.listFiles()?.all { it.name == "dist" } == true) { "目标目录包含其他文件" }
         val temporary = File(root, ".rain-clone-${java.util.UUID.randomUUID()}")
         try {
-            Git.cloneRepository().setURI(repo.cloneUrl).setDirectory(temporary)
-                .setCredentialsProvider(auth()).setCloneAllBranches(true)
+            Git.cloneRepository().setURI(gateway?.readUrl(repo.cloneUrl) ?: repo.cloneUrl).setDirectory(temporary)
+                .setCredentialsProvider(readCredentials()).setCloneAllBranches(true)
                 // Clone initializes its repository before invoking this callback.
                 // Persist the limits before its first fetch can trigger autoGC;
                 // FileRepository.getConfig() reloads the changed config from disk.
@@ -60,6 +68,10 @@ class LocalGit(private val token: () -> String?) {
             val oldDist = File(dir, "dist")
             require(!oldDist.exists() || !File(temporary, "dist").exists()) {
                 "远端仓库包含 dist，请先移动本地下载目录后重试"
+            }
+            openGit(temporary).use { cloned ->
+                cloned.repository.config.setString("remote", "origin", "url", repo.cloneUrl)
+                cloned.repository.config.save()
             }
             excludeDist(temporary)
             val backup = File(root, ".rain-downloads-${java.util.UUID.randomUUID()}")
@@ -108,17 +120,22 @@ class LocalGit(private val token: () -> String?) {
     }
 
     fun fetch(dir: File) = openGit(dir).use { git ->
-        git.fetch().setCredentialsProvider(auth()).call()
+        git.fetch().setRemote(remoteUrl(dir)).setCredentialsProvider(readCredentials()).call()
         "Fetch 完成"
     }
 
     fun pull(dir: File): String = openGit(dir).use { git ->
-        val result = git.pull().setCredentialsProvider(auth()).call()
+        val result = git.pull().setRemote(remoteUrl(dir)).setCredentialsProvider(readCredentials()).call()
         if (!result.isSuccessful) throw IOException("Pull 未成功，请检查合并冲突")
         "Pull 成功"
     }
 
     fun push(dir: File): String = openGit(dir).use { git ->
+        val configured = git.repository.config.getString("remote", "origin", "url").orEmpty()
+        Regex("https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\\.git)?").find(configured)?.value?.let { canonical ->
+            git.repository.config.setString("remote", "origin", "url", canonical)
+            git.repository.config.save()
+        }
         val branch = git.repository.fullBranch
         require(branch != null && branch.startsWith(Constants.R_HEADS)) { "请先切换到本地分支" }
         val results = git.push().setRemote("origin").setRefSpecs(org.eclipse.jgit.transport.RefSpec("$branch:$branch"))
@@ -298,7 +315,6 @@ class LocalGit(private val token: () -> String?) {
         file.writeText(content, Charsets.UTF_8)
     }
 
-    fun remoteUrl(dir: File): String = openGit(dir).use { it.repository.config.getString("remote", "origin", "url").orEmpty() }
 
     fun configureAuthor(dir: File, name: String, email: String): Unit = openGit(dir).use { git ->
         if (name.isNotBlank() && email.contains('@')) git.repository.config.apply {

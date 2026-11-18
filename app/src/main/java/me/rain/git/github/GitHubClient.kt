@@ -145,6 +145,67 @@ class GitHubClient(private val token: () -> String?) {
             JSONObject().put("title", title.trim()).put("body", description.trim()).toString())).getInt("number")
     }
 
+    suspend fun createComment(r: RemoteRepo, number: Int, body: String): String = withContext(Dispatchers.IO) {
+        require(body.isNotBlank()) { "评论内容不能为空" }
+        JSONObject(call(endpoint("${repoPath(r)}/issues/$number/comments"), "POST",
+            JSONObject().put("body", body).toString())).getString("html_url")
+    }
+
+    suspend fun pullRequest(r: RemoteRepo, number: Int): JSONObject = withContext(Dispatchers.IO) {
+        JSONObject(call(endpoint("${repoPath(r)}/pulls/$number")))
+    }
+
+    suspend fun createPullRequest(r: RemoteRepo, title: String, head: String, base: String,
+        body: String, draft: Boolean): JSONObject = withContext(Dispatchers.IO) {
+        require(title.isNotBlank() && head.isNotBlank() && base.isNotBlank()) { "PR 标题和分支不能为空" }
+        JSONObject(call(endpoint("${repoPath(r)}/pulls"), "POST", JSONObject()
+            .put("title", title).put("head", head).put("base", base)
+            .put("body", body).put("draft", draft).toString()))
+    }
+
+    suspend fun mergePullRequest(r: RemoteRepo, number: Int, message: String, method: String): JSONObject = withContext(Dispatchers.IO) {
+        require(method in setOf("merge", "squash", "rebase")) { "合并方式仅支持 merge、squash 或 rebase" }
+        JSONObject(call(endpoint("${repoPath(r)}/pulls/$number/merge"), "PUT",
+            JSONObject().put("commit_title", message).put("merge_method", method).toString()))
+    }
+
+    suspend fun reviews(r: RemoteRepo, number: Int): JSONArray = withContext(Dispatchers.IO) {
+        JSONArray(call(endpoint("${repoPath(r)}/pulls/$number/reviews?per_page=100")))
+    }
+
+    suspend fun reviewComments(r: RemoteRepo, number: Int): JSONArray = withContext(Dispatchers.IO) {
+        JSONArray(call(endpoint("${repoPath(r)}/pulls/$number/comments?per_page=100")))
+    }
+
+    suspend fun createReview(r: RemoteRepo, number: Int, body: String, event: String): JSONObject = withContext(Dispatchers.IO) {
+        require(event in setOf("APPROVE", "REQUEST_CHANGES", "COMMENT")) { "评审类型无效" }
+        JSONObject(call(endpoint("${repoPath(r)}/pulls/$number/reviews"), "POST",
+            JSONObject().put("body", body).put("event", event).toString()))
+    }
+
+    suspend fun createReviewComment(r: RemoteRepo, number: Int, body: String,
+        commit: String, path: String, line: Int, side: String): JSONObject = withContext(Dispatchers.IO) {
+        require(body.isNotBlank() && commit.isNotBlank() && path.isNotBlank() && line > 0) { "评审评论参数不完整" }
+        require(side in setOf("LEFT", "RIGHT")) { "side 仅支持 LEFT 或 RIGHT" }
+        JSONObject(call(endpoint("${repoPath(r)}/pulls/$number/comments"), "POST", JSONObject()
+            .put("body", body).put("commit_id", commit).put("path", path)
+            .put("line", line).put("side", side).toString()))
+    }
+
+    suspend fun createBranch(r: RemoteRepo, branch: String, sha: String): JSONObject = withContext(Dispatchers.IO) {
+        require(org.eclipse.jgit.lib.Repository.isValidRefName("refs/heads/$branch")) { "分支名称不合法" }
+        require(Regex("[0-9a-fA-F]{40}").matches(sha)) { "请提供完整的 40 位提交 SHA" }
+        JSONObject(call(endpoint("${repoPath(r)}/git/refs"), "POST",
+            JSONObject().put("ref", "refs/heads/$branch").put("sha", sha).toString()))
+    }
+
+    suspend fun createTag(r: RemoteRepo, tag: String, sha: String): JSONObject = withContext(Dispatchers.IO) {
+        require(org.eclipse.jgit.lib.Repository.isValidRefName("refs/tags/$tag")) { "标签名称不合法" }
+        require(Regex("[0-9a-fA-F]{40}").matches(sha)) { "请提供完整的 40 位提交 SHA" }
+        JSONObject(call(endpoint("${repoPath(r)}/git/refs"), "POST",
+            JSONObject().put("ref", "refs/tags/$tag").put("sha", sha).toString()))
+    }
+
     suspend fun dispatch(r: RemoteRepo, w: Workflow, branch: String, inputsText: String) = withContext(Dispatchers.IO) {
         require(branch.isNotBlank()) { "请输入分支" }
         val inputs = if (inputsText.isBlank()) JSONObject() else JSONObject(inputsText)

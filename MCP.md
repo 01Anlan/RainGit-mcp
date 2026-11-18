@@ -32,9 +32,18 @@ RainGit 内置一个 Streamable HTTP MCP Server。登录 GitHub 后，在底部 
 
 ## 工具
 
-查询：`list_repositories`、`list_local_repositories`、`get_repository_status`、`list_files`、`list_directories`、`read_file`、`search_files`、`get_diff`、`list_commits`、`get_commit`、`list_workflows`、`list_workflow_runs`、`get_workflow_run`、`get_workflow_logs`、`list_issues`、`list_pull_requests`。
+所有工具的功能和参数说明均已中文化。App 的“查看工具清单”可直接查看每个工具的中文用途。
 
-修改：`clone_repository`、`write_file`、`create_directory`、`rename_file`、`delete_file`、`fetch_repository`、`pull_repository`、`stage_files`、`unstage_files`、`commit_changes`、`push_repository`、`create_branch`、`checkout_branch`、`create_stash`、`apply_stash`、`dispatch_workflow`、`control_workflow_run`、`create_issue`。
+查询：`list_repositories`、`list_local_repositories`、`get_repository_status`、`list_files`、`list_directories`、`read_file`、`search_files`、`get_diff`、`list_commits`、`get_commit`、`list_workflows`、`list_workflow_runs`、`get_workflow_run`、`get_workflow_logs`、`list_issues`、`list_pull_requests`、`list_artifacts`、`get_pull_request`、`list_reviews`、`list_review_comments`。
+
+修改：`clone_repository`、`write_file`、`create_directory`、`rename_file`、`delete_file`、`fetch_repository`、`pull_repository`、`stage_files`、`unstage_files`、`commit_changes`、`push_repository`、`create_branch`、`checkout_branch`、`create_stash`、`apply_stash`、`dispatch_workflow`、`control_workflow_run`、`create_issue`、`create_comment`、`download_artifact`、`create_pull_request`、`merge_pull_request`、`create_review`、`create_review_comment`、`create_remote_branch`、`create_remote_tag`。
+
+## 自动启动与 GitHub 加速
+
+- “打开软件自动启动 MCP”开启后，进入 App 会使用保存的端口启动服务。
+- GitHub 加速用于公开仓库的克隆、Fetch 和 Pull，支持 GitHub 官方、ghproxy.net、gh-proxy.com、ghfast.top、kkgithub.com 五个通道。
+- 点击“立即测速并选择”并行探测全部节点；自动模式选择响应最快的可用节点。
+- GitHub API、Push 和构建产物下载始终走官方地址，不向公共代理发送 Token。
 
 ## 后台与悬浮窗
 

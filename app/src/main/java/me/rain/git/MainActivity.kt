@@ -13,11 +13,17 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.viewmodel.compose.viewModel
 import me.rain.git.ui.RainApp
 import me.rain.git.ui.RainViewModel
+import me.rain.git.mcp.McpService
+import me.rain.git.mcp.McpSettings
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        val mcp = McpSettings(this)
+        if (mcp.autoStart && !McpSettings.state.value.running && !McpSettings.state.value.starting) {
+            runCatching { McpService.start(this, mcp.port) }
+        }
         setContent {
             val model: RainViewModel = viewModel()
             val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->

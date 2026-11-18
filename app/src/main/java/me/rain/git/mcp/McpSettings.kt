@@ -15,6 +15,10 @@ class McpSettings(context: Context) {
             prefs.edit().putInt("port", value).apply()
         }
 
+    var autoStart: Boolean
+        get() = prefs.getBoolean("auto_start", false)
+        set(value) { prefs.edit().putBoolean("auto_start", value).apply() }
+
     var overlayEnabled: Boolean
         get() = prefs.getBoolean("overlay", false)
         set(value) { prefs.edit().putBoolean("overlay", value).apply() }
