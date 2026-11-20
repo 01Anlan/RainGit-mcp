@@ -31,14 +31,14 @@ class McpTools(context: Context, private val settings: McpSettings) {
     )
 
     init {
-        add("list_repositories", "列出当前 GitHub 账号可见的远程仓库，包括默认分支、私有状态和更新时间。", "{}", handler = {
+        add("list_repositories", "列出当前 GitHub 账号可见的远程仓库，包括默认分支、私有状态和更新时间。", emptySchema, handler = {
             JSONArray(github.repos().map { repo ->
                 mapOf("full_name" to repo.fullName, "private" to repo.privateRepo,
                     "default_branch" to repo.defaultBranch, "description" to repo.description,
                     "updated_at" to repo.updatedAt)
             }).toString()
         })
-        add("list_local_repositories", "列出 RainGit 工作目录内已经克隆或初始化的本地仓库。", "{}", handler = {
+        add("list_local_repositories", "列出 RainGit 工作目录内已经克隆或初始化的本地仓库。", emptySchema, handler = {
             JSONArray(localRepos().map { mapOf("name" to it.name, "path" to it.path) }).toString()
         })
         add("get_repository_status", "查看本地仓库当前分支、暂存和未暂存修改、冲突、远端领先或落后提交数。",
@@ -380,6 +380,7 @@ class McpTools(context: Context, private val settings: McpSettings) {
             "tag" to "要创建的远程标签名称"
         ) }
 
+        private val emptySchema = schema()
         private val repoSchema = schema("repository" to "string", required = listOf("repository"))
         private val remoteSchema = schema("full_name" to "string", required = listOf("full_name"))
         private val runSchema = schema("full_name" to "string", "run_id" to "integer", required = listOf("full_name", "run_id"))
